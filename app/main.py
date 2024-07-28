@@ -12,21 +12,25 @@ def main():
             data = client.recv(1024).decode()
             print(f"Received request:\n{data}")
 
-            # Split the request into lines and get the request line
+            # Split the request into lines
             request_lines = data.split("\r\n")
             request_line = request_lines[0] if request_lines else ""
             
             # Extract the method and path from the request line
             if request_line:
                 method, path, _ = request_line.split(" ", 2)
-                headers = {line.split(": ")[0]: line.split(": ")[1] for line in request_lines[1:] if ": " in line}
                 
+                # Extract headers into a dictionary
+                headers = {}
+                for line in request_lines[1:]:
+                    if ": " in line:
+                        key, value = line.split(": ", 1)
+                        headers[key] = value
+
                 if method == "GET":
                     if path.startswith("/echo/"):
-                        # Extract the echo text from the path
+                        # Handle /echo/{str}
                         echo_text = path[len("/echo/"):]
-
-                        # Construct the HTTP response
                         response_body = echo_text
                         response = (
                             f"HTTP/1.1 200 OK\r\n"
@@ -35,8 +39,17 @@ def main():
                             "\r\n"
                             f"{response_body}"
                         ).encode()
-                    elif path == "/":
-                        response = "HTTP/1.1 200 OK\r\n\r\n".encode()
+                    elif path == "/user-agent":
+                        # Handle /user-agent
+                        user_agent = headers.get("User-Agent", "")
+                        response_body = user_agent
+                        response = (
+                            f"HTTP/1.1 200 OK\r\n"
+                            f"Content-Type: text/plain\r\n"
+                            f"Content-Length: {len(response_body)}\r\n"
+                            "\r\n"
+                            f"{response_body}"
+                        ).encode()
                     else:
                         response = "HTTP/1.1 404 Not Found\r\n\r\n".encode()
                 else:
