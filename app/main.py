@@ -15,20 +15,23 @@ def main():
             # Split the request into lines and get the request line
             request_lines = data.split("\r\n")
             request_line = request_lines[0] if request_lines else ""
-
-            # Extract method and path from the request line
+            
+            # Extract the method and path from the request line
             if request_line:
                 method, path, _ = request_line.split(" ", 2)
-
-                # Handle /echo/{str} endpoint
-                if path.startswith("/echo/"):
-                    content = path[len("/echo/"):]  # Extract the content
+                headers = {line.split(": ")[0]: line.split(": ")[1] for line in request_lines[1:] if ": " in line}
+                
+                if path == "/user-agent":
+                    # Get User-Agent header from the request
+                    user_agent = headers.get("User-Agent", "")
+                    
+                    # Construct the HTTP response with the User-Agent header value
                     response = (
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-Type: text/plain\r\n"
-                        f"Content-Length: {len(content)}\r\n"
+                        f"HTTP/1.1 200 OK\r\n"
+                        f"Content-Type: text/plain\r\n"
+                        f"Content-Length: {len(user_agent)}\r\n"
                         "\r\n"
-                        f"{content}"
+                        f"{user_agent}"
                     ).encode()
                 elif path == "/":
                     response = "HTTP/1.1 200 OK\r\n\r\n".encode()
