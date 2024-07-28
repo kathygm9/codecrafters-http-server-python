@@ -27,8 +27,8 @@ def make_response(
     headers = headers or {}
     msg = {
         200: "OK",
-        201: "CREATED",
-        404: "NOT FOUND",
+        201: "Created",  # Corrected response message
+        404: "Not Found",
     }
     return b"\r\n".join(
         map(
@@ -44,14 +44,13 @@ def make_response(
     )
 
 async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
-    content = await reader.read(2**16)
-    method, path, headers, body = parse_request(content)
-
+    method, path, headers, body = parse_request(await reader.read(2**16))
+    
     if re.fullmatch(r"/", path):
         writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
         stderr(f"[OUT] /")
     elif re.fullmatch(r"/user-agent", path):
-        ua = headers.get("User-Agent", "Unknown")
+        ua = headers.get("User-Agent", "")
         writer.write(make_response(200, {"Content-Type": "text/plain"}, ua))
         stderr(f"[OUT] user-agent {ua}")
     elif match := re.fullmatch(r"/echo/(.+)", path):
@@ -60,32 +59,23 @@ async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
         stderr(f"[OUT] echo {msg}")
     elif match := re.fullmatch(r"/files/(.+)", path):
         p = Path(GLOBALS["DIR"]) / match.group(1)
-        if method.upper() == "GET":
-            if p.is_file():
-                writer.write(
-                    make_response(
-                        200,
-                        {"Content-Type": "application/octet-stream"},
-                        p.read_text()
-                    )
+        if method.upper() == "GET" and p.is_file():
+            writer.write(
+                make_response(
+                    200,
+                    {"Content-Type": "application/octet-stream"},
+                    p.read_text(),
                 )
-            else:
-                writer.write(make_response(404))
+            )
         elif method.upper() == "POST":
-            try:
-                p.write_text(body)
-                writer.write(make_response(201))
-            except Exception as e:
-                stderr(f"[ERROR] {e}")
-                writer.write(make_response(500, {}, "Internal Server Error"))
+            p.write_bytes(body.encode())
+            writer.write(make_response(201))  # Returns 201 Created
         else:
             writer.write(make_response(404))
         stderr(f"[OUT] file {path}")
     else:
         writer.write(make_response(404, {}, ""))
         stderr(f"[OUT] 404")
-    
-    await writer.drain()  # Ensure the writer buffer is flushed
     writer.close()
 
 async def main():
@@ -93,7 +83,6 @@ async def main():
     parser.add_argument("--directory", default=".")
     args = parser.parse_args()
     GLOBALS["DIR"] = args.directory
-
     server = await asyncio.start_server(handle_connection, "localhost", 4221)
     async with server:
         stderr("Starting server...")
