@@ -45,16 +45,22 @@ def make_response(
 
 async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
     method, path, headers, body = parse_request(await reader.read(2**16))
+    
+    # Determine if we should use gzip encoding based on Accept-Encoding
+    content_encoding = None
+    if "Accept-Encoding" in headers and "gzip" in headers["Accept-Encoding"]:
+        content_encoding = "gzip"
+    
     if re.fullmatch(r"/", path):
-        writer.write(make_response(200))
+        writer.write(make_response(200, {"Content-Encoding": content_encoding}))
         stderr(f"[OUT] /")
     elif re.fullmatch(r"/user-agent", path):
         ua = headers.get("User-Agent", "")
-        writer.write(make_response(200, {"Content-Type": "text/plain"}, ua))
+        writer.write(make_response(200, {"Content-Type": "text/plain", "Content-Encoding": content_encoding}, ua))
         stderr(f"[OUT] user-agent {ua}")
     elif match := re.fullmatch(r"/echo/(.+)", path):
         msg = match.group(1)
-        writer.write(make_response(200, {"Content-Type": "text/plain"}, msg))
+        writer.write(make_response(200, {"Content-Type": "text/plain", "Content-Encoding": content_encoding}, msg))
         stderr(f"[OUT] echo {msg}")
     elif match := re.fullmatch(r"/files/(.+)", path):
         p = Path(GLOBALS["DIR"]) / match.group(1)
@@ -62,15 +68,15 @@ async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
             writer.write(
                 make_response(
                     200,
-                    {"Content-Type": "application/octet-stream"},
+                    {"Content-Type": "application/octet-stream", "Content-Encoding": content_encoding},
                     p.read_text(),
                 )
             )
         elif method.upper() == "POST":
             p.write_bytes(body.encode())
-            writer.write(make_response(201))
+            writer.write(make_response(201, {"Content-Encoding": content_encoding}))
         else:
-            writer.write(make_response(404))
+            writer.write(make_response(404, {}, ""))
         stderr(f"[OUT] file {path}")
     else:
         writer.write(make_response(404, {}, ""))
