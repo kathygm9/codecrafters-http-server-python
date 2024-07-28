@@ -27,7 +27,7 @@ def make_response(
     headers = headers or {}
     msg = {
         200: "OK",
-        201: "Created",  # Corrected response message
+        201: "Created",
         404: "Not Found",
     }
     return b"\r\n".join(
@@ -45,9 +45,15 @@ def make_response(
 
 async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
     method, path, headers, body = parse_request(await reader.read(2**16))
-    
+
+    # Determine if gzip encoding is requested and supported
+    accept_encoding = headers.get("Accept-Encoding", "")
+    supports_gzip = "gzip" in accept_encoding
+
+    response_headers = {}
+
     if re.fullmatch(r"/", path):
-        writer.write(b"HTTP/1.1 200 OK\r\n\r\n")
+        writer.write(make_response(200, response_headers))
         stderr(f"[OUT] /")
     elif re.fullmatch(r"/user-agent", path):
         ua = headers.get("User-Agent", "")
@@ -55,7 +61,9 @@ async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
         stderr(f"[OUT] user-agent {ua}")
     elif match := re.fullmatch(r"/echo/(.+)", path):
         msg = match.group(1)
-        writer.write(make_response(200, {"Content-Type": "text/plain"}, msg))
+        if supports_gzip:
+            response_headers["Content-Encoding"] = "gzip"
+        writer.write(make_response(200, response_headers, msg))
         stderr(f"[OUT] echo {msg}")
     elif match := re.fullmatch(r"/files/(.+)", path):
         p = Path(GLOBALS["DIR"]) / match.group(1)
