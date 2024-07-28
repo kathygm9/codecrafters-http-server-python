@@ -9,8 +9,9 @@ def parse_request(conn):
     d = {}
     headers = {}
     body = []
-    target = 0  # 0: request line, 1: headers, 2: body
+    target = 0  # request
     rest = b""
+    ind = 0
     body_len = 0
     body_count = 0
 
@@ -18,23 +19,19 @@ def parse_request(conn):
         if rest:
             data = rest + data
             rest = b""
-        
-        # Handle request line
         if target == 0:
             ind = data.find(RN)
             if ind == -1:
                 rest = data
                 continue
-            
+            # GET URL HTTP
             line = data[:ind].decode()
-            data = data[ind + 2 :]
+            data = data[ind + 2:]
             d["request"] = line
             l = line.split()
             d["method"] = l[0]  # GET, POST
             d["url"] = l[1]
-            target = 1  # Move to headers
-        
-        # Handle headers
+            target = 1  # headers
         if target == 1:
             if not data:
                 continue
@@ -43,21 +40,18 @@ def parse_request(conn):
                 if ind == -1:
                     rest = data
                     break
-                if ind == 0:  # End of headers section
-                    data = data[ind + 2 :]
+                if ind == 0:  # \r\n\r\n
+                    data = data[ind + 2:]
                     target = 2
                     break
                 line = data[:ind].decode()
-                data = data[ind + 2 :]
+                data = data[ind + 2:]
                 l = line.split(":", maxsplit=1)
-                if len(l) == 2:
-                    field = l[0].strip().lower()
-                    value = l[1].strip()
-                    headers[field] = value
+                field = l[0].lower()
+                value = l[1].strip()
+                headers[field] = value
             if target == 1:
                 continue
-        
-        # Handle body
         if target == 2:
             if "content-length" not in headers:
                 break
@@ -65,13 +59,11 @@ def parse_request(conn):
             if not body_len:
                 break
             target = 3
-        
         if target == 3:
             body.append(data)
             body_count += len(data)
             if body_count >= body_len:
                 break
-
     d["headers"] = headers
     d["body"] = b"".join(body)
     return d
@@ -82,6 +74,7 @@ def req_handler(conn, dir_):
         url = d["url"]
         method = d["method"]
         headers = d["headers"]
+
         if url == "/":
             conn.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
         elif url.startswith("/echo/"):
@@ -93,23 +86,37 @@ def req_handler(conn, dir_):
                 if "gzip" in encoding:
                     response_headers.append(b"Content-Encoding: gzip")
             response_headers.append(f"Content-Length: {len(body)}".encode())
-            response_headers.append(RN)
+            response_headers.append(b"")  # End of headers section
             
+            # Send response
             conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"\r\n".join(response_headers))
             conn.sendall(body)
         elif url == "/user-agent":
             body = headers.get("user-agent", "").encode()
-            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n")
-            conn.sendall(f"Content-Length: {len(body)}".encode() + RN)
+            response_headers = [
+                b"Content-Type: text/plain",
+                f"Content-Length: {len(body)}".encode(),
+            ]
+            response_headers.append(b"")  # End of headers section
+            
+            # Send response
+            conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"\r\n".join(response_headers))
             conn.sendall(body)
         elif url.startswith("/files/"):
             file = Path(dir_) / url[7:]
             if method == "GET":
                 if file.exists():
-                    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n")
                     with open(file, "rb") as fp:
                         body = fp.read()
-                    conn.sendall(f"Content-Length: {len(body)}".encode() + RN)
+                    response_headers = [
+                        b"HTTP/1.1 200 OK",
+                        b"Content-Type: application/octet-stream",
+                        f"Content-Length: {len(body)}".encode(),
+                    ]
+                    response_headers.append(b"")  # End of headers section
+                    
+                    # Send response
+                    conn.sendall(b"\r\n".join(response_headers))
                     conn.sendall(body)
                 else:
                     conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
@@ -123,15 +130,14 @@ def req_handler(conn, dir_):
             conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Socket server")
+    parser = argparse.ArgumentParser(description="socket server")
     parser.add_argument(
-        "--directory", default=".", help="Directory from which to get files"
+        "--directory", default=".", help="directory from which to get files"
     )
-    args = parser.parse_args()
-    
+    args = parser.parse_args()  # args.directory
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
     while True:
-        conn, _ = server_socket.accept()
+        conn, _ = server_socket.accept()  # wait for client
         Thread(target=req_handler, args=(conn, args.directory)).start()
 
 if __name__ == "__main__":
