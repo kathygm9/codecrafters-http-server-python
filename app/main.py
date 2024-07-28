@@ -6,29 +6,41 @@ def main():
     print("Server is listening on port 4221")
 
     while True:
-        connection, _ = server_socket.accept()
+        client, _ = server_socket.accept()
         try:
             # Receive the HTTP request
-            request = connection.recv(1024).decode()
-            print(f"Received request:\n{request}")
+            data = client.recv(1024).decode()
+            print(f"Received request:\n{data}")
 
-            # Extract the request line (first line of the request)
-            request_line = request.split('\r\n')[0]
-            print(f"Request line: {request_line}")
+            # Split the request into lines and get the request line
+            request_lines = data.split("\r\n")
+            request_line = request_lines[0] if request_lines else ""
 
-            # Parse the request line
-            method, path, _ = request_line.split(' ', 2)
+            # Extract method and path from the request line
+            if request_line:
+                method, path, _ = request_line.split(" ", 2)
 
-            # Determine the response based on the path
-            if path == '/':
-                response = b"HTTP/1.1 200 OK\r\n\r\n"
+                # Handle /echo/{str} endpoint
+                if path.startswith("/echo/"):
+                    content = path[len("/echo/"):]  # Extract the content
+                    response = (
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: text/plain\r\n"
+                        f"Content-Length: {len(content)}\r\n"
+                        "\r\n"
+                        f"{content}"
+                    ).encode()
+                elif path == "/":
+                    response = "HTTP/1.1 200 OK\r\n\r\n".encode()
+                else:
+                    response = "HTTP/1.1 404 Not Found\r\n\r\n".encode()
             else:
-                response = b"HTTP/1.1 404 Not Found\r\n\r\n"
+                response = "HTTP/1.1 400 Bad Request\r\n\r\n".encode()
 
             # Send the HTTP response
-            connection.sendall(response)
+            client.send(response)
         finally:
-            connection.close()
+            client.close()
 
 if __name__ == "__main__":
     main()
