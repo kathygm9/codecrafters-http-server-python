@@ -1,17 +1,17 @@
-import socket
-import threading
-import sys
-
 def handle_req(client, addr, directory):
     try:
-        data = client.recv(4096).decode()
-        req_lines = data.split("\r\n")
+        data = client.recv(4096)  # Read data from the client
+        if not data:
+            return
 
-        # Request line
+        # Decode the data and handle cases with potential null bytes
+        decoded_data = data.decode(errors='ignore')  # Ignore decoding errors
+
+        # Separate headers and body
+        req_lines = decoded_data.split("\r\n")
         request_line = req_lines[0]
         method, path, _ = request_line.split(" ")
 
-        # Parse headers
         headers = {}
         i = 1
         while req_lines[i]:
@@ -42,7 +42,7 @@ def handle_req(client, addr, directory):
         elif method == "POST" and path.startswith("/files"):
             filename = path[7:]
             content_length = int(headers.get("Content-Length", 0))
-            body = data.split("\r\n\r\n", 1)[1][:content_length]
+            body = data.split(b"\r\n\r\n", 1)[1][:content_length].decode(errors='ignore')
             try:
                 with open(f"{directory}/{filename}", "w") as f:
                     f.write(body)
@@ -55,23 +55,3 @@ def handle_req(client, addr, directory):
         client.send(response)
     finally:
         client.close()
-
-def main():
-    if len(sys.argv) != 3 or sys.argv[1] != "--directory":
-        print("Usage: python main.py --directory <path>")
-        sys.exit(1)
-
-    directory = sys.argv[2]
-    if not directory:
-        print("Directory path is required.")
-        sys.exit(1)
-
-    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    print("Server is listening on port 4221")
-
-    while True:
-        client, addr = server_socket.accept()
-        threading.Thread(target=handle_req, args=(client, addr, directory)).start()
-
-if __name__ == "__main__":
-    main()
