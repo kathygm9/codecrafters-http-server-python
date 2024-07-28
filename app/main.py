@@ -36,13 +36,13 @@ def process_conn(conn):
                 extra_headers = []
                 if "accept-encoding" in headers:
                     encoding = headers["accept-encoding"]
-                    if encoding in ["gzip"]:
+                    if encoding == "gzip":
                         extra_headers.append(b"Content-Encoding: gzip\r\n")
                 conn.send(
                     b"".join(
                         [
                             b"HTTP/1.1 200 OK\r\n",
-                            b"\r\n".join(extra_headers),
+                            b"\r\n".join(extra_headers) + b"\r\n",
                             b"Content-Type: text/plain\r\n",
                             f"Content-Length: {len(body)}\r\n".encode(),
                             b"\r\n",
