@@ -19,7 +19,7 @@ def main():
             # Extract the method and path from the request line
             if request_line:
                 method, path, _ = request_line.split(" ", 2)
-                
+
                 # Extract headers into a dictionary
                 headers = {}
                 for line in request_lines[1:]:
@@ -28,7 +28,10 @@ def main():
                         headers[key] = value
 
                 if method == "GET":
-                    if path.startswith("/echo/"):
+                    if path == "/":
+                        # Handle root path
+                        response = "HTTP/1.1 200 OK\r\n\r\n".encode()
+                    elif path.startswith("/echo/"):
                         # Handle /echo/{str}
                         echo_text = path[len("/echo/"):]
                         response_body = echo_text
