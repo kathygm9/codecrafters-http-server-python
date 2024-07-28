@@ -1,17 +1,34 @@
 import socket
 
 def main():
-    # You can use print statements as follows for debugging, they'll be visible when running tests.
-    print("Logs from your program will appear here!")
-
-    # Uncomment this to pass the first stage
+    # Create a TCP/IP socket
     server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    connection, _ = server_socket.accept()  # wait for client
+    print("Server is listening on port 4221")
 
-    # Send HTTP response
-    response = b"HTTP/1.1 200 OK\r\n\r\n"
-    connection.sendall(response)
-    connection.close()
+    while True:
+        connection, _ = server_socket.accept()
+        try:
+            # Receive the HTTP request
+            request = connection.recv(1024).decode()
+            print(f"Received request:\n{request}")
+
+            # Extract the request line (first line of the request)
+            request_line = request.split('\r\n')[0]
+            print(f"Request line: {request_line}")
+
+            # Parse the request line
+            method, path, _ = request_line.split(' ', 2)
+
+            # Determine the response based on the path
+            if path == '/':
+                response = b"HTTP/1.1 200 OK\r\n\r\n"
+            else:
+                response = b"HTTP/1.1 404 Not Found\r\n\r\n"
+
+            # Send the HTTP response
+            connection.sendall(response)
+        finally:
+            connection.close()
 
 if __name__ == "__main__":
     main()
