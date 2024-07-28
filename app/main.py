@@ -51,16 +51,17 @@ async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
     if "Accept-Encoding" in headers and "gzip" in headers["Accept-Encoding"]:
         content_encoding = "gzip"
     
+    # Handle request based on path
     if re.fullmatch(r"/", path):
-        writer.write(make_response(200, {"Content-Encoding": content_encoding}))
+        writer.write(make_response(200, {"Content-Encoding": content_encoding} if content_encoding else {}))
         stderr(f"[OUT] /")
     elif re.fullmatch(r"/user-agent", path):
         ua = headers.get("User-Agent", "")
-        writer.write(make_response(200, {"Content-Type": "text/plain", "Content-Encoding": content_encoding}, ua))
+        writer.write(make_response(200, {"Content-Type": "text/plain"} | ({"Content-Encoding": content_encoding} if content_encoding else {}), ua))
         stderr(f"[OUT] user-agent {ua}")
     elif match := re.fullmatch(r"/echo/(.+)", path):
         msg = match.group(1)
-        writer.write(make_response(200, {"Content-Type": "text/plain", "Content-Encoding": content_encoding}, msg))
+        writer.write(make_response(200, {"Content-Type": "text/plain"} | ({"Content-Encoding": content_encoding} if content_encoding else {}), msg))
         stderr(f"[OUT] echo {msg}")
     elif match := re.fullmatch(r"/files/(.+)", path):
         p = Path(GLOBALS["DIR"]) / match.group(1)
@@ -68,13 +69,13 @@ async def handle_connection(reader: StreamReader, writer: StreamWriter) -> None:
             writer.write(
                 make_response(
                     200,
-                    {"Content-Type": "application/octet-stream", "Content-Encoding": content_encoding},
+                    {"Content-Type": "application/octet-stream"} | ({"Content-Encoding": content_encoding} if content_encoding else {}),
                     p.read_text(),
                 )
             )
         elif method.upper() == "POST":
             p.write_bytes(body.encode())
-            writer.write(make_response(201, {"Content-Encoding": content_encoding}))
+            writer.write(make_response(201, {"Content-Encoding": content_encoding} if content_encoding else {}))
         else:
             writer.write(make_response(404, {}, ""))
         stderr(f"[OUT] file {path}")
