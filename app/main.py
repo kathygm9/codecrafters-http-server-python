@@ -1,113 +1,145 @@
 import socket
-import sys
-from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from threading import Thread
+import argparse
 from pathlib import Path
 
-def process_conn(conn):
+RN = b"\r\n"
+
+def parse_request(conn):
+    d = {}
+    headers = {}
+    body = []
+    target = 0  # request
+    rest = b""
+    body_len = 0
+    body_count = 0
+
+    while data := conn.recv(1024):
+        if rest:
+            data = rest + data
+            rest = b""
+
+        if target == 0:  # Parsing request line
+            ind = data.find(RN)
+            if ind == -1:
+                rest = data
+                continue
+            # GET URL HTTP
+            line = data[:ind].decode()
+            data = data[ind + 2:]
+            d["request"] = line
+            l = line.split()
+            d["method"] = l[0]  # GET, POST
+            d["url"] = l[1]
+            target = 1  # headers
+
+        if target == 1:  # Parsing headers
+            ind = data.find(RN)
+            if ind == -1:
+                rest = data
+                continue
+            while True:
+                ind = data.find(RN)
+                if ind == -1:
+                    rest = data
+                    break
+                if ind == 0:  # \r\n\r\n
+                    data = data[ind + 2:]
+                    target = 2
+                    break
+                line = data[:ind].decode()
+                data = data[ind + 2:]
+                l = line.split(":", maxsplit=1)
+                if len(l) == 2:
+                    field = l[0].strip().lower()
+                    value = l[1].strip()
+                    headers[field] = value
+
+        if target == 2:  # Parsing body
+            if "content-length" not in headers:
+                break
+            body_len = int(headers["content-length"])
+            if not body_len:
+                break
+            target = 3
+
+        if target == 3:
+            body.append(data)
+            body_count += len(data)
+            if body_count >= body_len:
+                break
+
+    d["headers"] = headers
+    d["body"] = b"".join(body)
+    return d
+
+def req_handler(conn, dir_):
     with conn:
-        init = conn.recv(4096)
-        
-        def parse_http(bs: bytes):
-            lines: List[bytes] = []
-            while not bs.startswith(b"\r\n\r\n"):
-                sp = bs.split(b"\r\n", 1)
-                if len(sp) == 2:
-                    line, bs = sp
-                    lines.append(line)
-                else:
-                    cont = conn.recv(4096)
-                    bs += cont
-            return lines, bs[4:]  # 4 bytes for \r\n\r\n
+        d = parse_request(conn)
+        url = d["url"]
+        method = d["method"]
+        headers = d["headers"]
 
-        (start_line, *raw_headers), body_start = parse_http(init)
-        headers = {
-            parts[0].strip().lower(): parts[1].strip()
-            for rh in raw_headers
-            if (parts := rh.decode().split(": ", maxsplit=1))
-        }
-        method, path, _ = start_line.decode().split(" ", maxsplit=2)
-
-        match (method, path, path.split("/")):
-            case ("GET", "/", _):
-                conn.send(b"HTTP/1.1 200 OK\r\n\r\n")
-            case ("GET", _, ["", "echo", data]):
-                body = data.encode()
-                extra_headers = []
-                if "accept-encoding" in headers:
-                    encoding = headers["accept-encoding"]
-                    if encoding == "gzip":
-                        extra_headers.append(b"Content-Encoding: gzip\r\n")
-                conn.send(
-                    b"".join(
-                        [
-                            b"HTTP/1.1 200 OK\r\n",
-                            b"\r\n".join(extra_headers) + b"\r\n",
-                            b"Content-Type: text/plain\r\n",
-                            f"Content-Length: {len(body)}\r\n".encode(),
-                            b"\r\n",
-                            body,
-                        ]
-                    )
-                )
-            case ("GET", "/user-agent", _):
-                body = headers.get("user-agent", "").encode()
-                conn.send(
-                    b"".join(
-                        [
-                            b"HTTP/1.1 200 OK\r\n",
-                            b"Content-Type: text/plain\r\n",
-                            f"Content-Length: {len(body)}\r\n".encode(),
-                            b"\r\n",
-                            body,
-                        ]
-                    )
-                )
-            case ("GET", _, ["", "files", f]):
-                target = Path(sys.argv[1]) / f
-                if target.exists():
-                    body = target.read_bytes()
-                    conn.send(
-                        b"".join(
-                            [
-                                b"HTTP/1.1 200 OK\r\n",
-                                b"Content-Type: application/octet-stream\r\n",
-                                f"Content-Length: {len(body)}\r\n".encode(),
-                                b"\r\n",
-                                body,
-                            ]
-                        )
-                    )
+        if url == "/":
+            conn.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+        elif url.startswith("/echo/"):
+            body = url[6:].encode()
+            response = [
+                b"HTTP/1.1 200 OK",
+                b"Content-Type: text/plain",
+            ]
+            if encoding := headers.get("accept-encoding"):
+                if "gzip" in encoding.split(", "):
+                    response.append(b"Content-Encoding: gzip")
+            response.append(f"Content-Length: {len(body)}".encode())
+            response.append(RN)
+            response.append(body)
+            conn.sendall(b"\r\n".join(response))
+        elif url == "/user-agent":
+            body = headers.get("user-agent", "").encode()
+            response = [
+                b"HTTP/1.1 200 OK",
+                b"Content-Type: text/plain",
+                f"Content-Length: {len(body)}".encode(),
+                RN,
+            ]
+            response.append(body)
+            conn.sendall(b"\r\n".join(response))
+        elif url.startswith("/files/"):
+            file = Path(dir_) / url[7:]
+            if method == "GET":
+                if file.exists():
+                    response = [
+                        b"HTTP/1.1 200 OK",
+                        b"Content-Type: application/octet-stream",
+                    ]
+                    with open(file, "rb") as fp:
+                        body = fp.read()
+                    response.append(f"Content-Length: {len(body)}".encode())
+                    response.append(RN)
+                    response.append(body)
+                    conn.sendall(b"\r\n".join(response))
                 else:
-                    conn.send(b"HTTP/1.1 404 Not Found\r\n\r\n")
-            case ("POST", _, ["", "files", f]):
-                target = Path(sys.argv[1]) / f
-                size = int(headers.get("content-length", 0))
-                remaining = size - len(body_start)
-                if remaining > 0:
-                    body_rest = conn.recv(remaining, socket.MSG_WAITALL)
-                else:
-                    body_rest = b""
-                body = body_start + body_rest
-                target.write_bytes(body)
-                conn.send(
-                    b"HTTP/1.1 201 Created\r\n\r\n"
-                )
-            case _:
-                conn.send(b"HTTP/1.1 404 Not Found\r\n\r\n")
-
-def process_conn_with_exception(conn):
-    try:
-        process_conn(conn)
-    except Exception as ex:
-        print(ex)
+                    conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+            elif method == "POST":
+                with open(file, "wb") as fp:
+                    fp.write(d["body"])
+                conn.sendall(b"HTTP/1.1 201 Created\r\n\r\n")
+            else:
+                conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+        else:
+            conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
 def main():
-    with socket.create_server(("localhost", 4221), reuse_port=True) as server_socket:
-        with ThreadPoolExecutor(max_workers=100) as executor:
-            while True:
-                conn, _ = server_socket.accept()
-                executor.submit(process_conn_with_exception, conn)
+    parser = argparse.ArgumentParser(description="Socket server")
+    parser.add_argument(
+        "--directory", default=".", help="Directory from which to get files"
+    )
+    args = parser.parse_args()
+    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
+    while True:
+        conn, _ = server_socket.accept()
+        Thread(target=req_handler, args=(conn, args.directory)).start()
 
 if __name__ == "__main__":
     main()
