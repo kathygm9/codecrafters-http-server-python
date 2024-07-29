@@ -3,6 +3,14 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from pathlib import Path
+import gzip
+import io
+
+def gzip_compress(data: bytes) -> bytes:
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode='wb') as f:
+        f.write(data)
+    return buf.getvalue()
 
 def process_conn(conn):
     with conn:
@@ -38,7 +46,9 @@ def process_conn(conn):
                 if "Accept-Encoding" in headers:
                     encodings = headers["Accept-Encoding"].split(", ")
                     if "gzip" in encodings:
+                        compressed_body = gzip_compress(body)
                         extra_headers.append(b"Content-Encoding: gzip\r\n")
+                        body = compressed_body
                 conn.send(
                     b"".join(
                         [
