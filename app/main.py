@@ -1,73 +1,112 @@
-import gzip
-import pathlib
 import socket
 import sys
-import threading
+import gzip
+from concurrent.futures import ThreadPoolExecutor
+from typing import List
+from pathlib import Path
 
-def read_request(sock):
-    request = sock.recv(4096).decode()
-    headers = {}
-    lines = request.split("\r\n")
-    start_line = lines[0]
-    method, target, _ = start_line.split()
-    for line in lines[1:]:
-        if line:
-            key, value = line.split(": ", 1)
-            headers[key] = value
-    return method, target, headers
+def process_conn(conn):
+    with conn:
+        init = conn.recv(4096)
 
-class Response:
-    def __init__(self, status_code=200, status_text="OK", headers=None, body=b""):
-        self.status_code = status_code
-        self.status_text = status_text
-        self.headers = headers or {}
-        self.body = body
+        def parse_http(bs: bytes):
+            lines: List[bytes] = []
+            while not bs.startswith(b"\r\n"):
+                sp = bs.split(b"\r\n", 1)
+                if len(sp) == 2:
+                    line, bs = sp
+                    lines.append(line)
+                else:
+                    cont = conn.recv(4096)
+                    bs += cont
+            return lines, bs[2:]
 
-    def to_raw(self):
-        response_line = f"HTTP/1.1 {self.status_code} {self.status_text}\r\n"
-        headers = ''.join(f"{key}: {value}\r\n" for key, value in self.headers.items())
-        return (response_line + headers + "\r\n").encode() + self.body
+        (start_line, *raw_headers), body_start = parse_http(init)
+        headers = {
+            parts[0]: parts[1]
+            for rh in raw_headers
+            if (parts := rh.decode().split(": "))
+        }
+        method, path, _ = start_line.decode().split(" ")
+        
+        match (method, path, path.split("/")):
+            case ("GET", "/", _):
+                conn.send(b"HTTP/1.1 200 OK\r\n\r\n")
+            case ("GET", _, ["", "echo", data]):
+                body = data.encode()
+                extra_headers = []
+                encoding = headers.get("Accept-Encoding")
+                if encoding is not None and "gzip" in {s.strip() for s in encoding.split(",")}:
+                    body = gzip.compress(body)
+                    extra_headers.append(b"Content-Encoding: gzip\r\n")
+                conn.send(
+                    b"".join(
+                        [
+                            b"HTTP/1.1 200 OK\r\n",
+                            *extra_headers,
+                            b"Content-Type: text/plain\r\n",
+                            b"Content-Length: %d\r\n" % len(body),
+                            b"\r\n",
+                            body,
+                        ]
+                    )
+                )
+            case ("GET", "/user-agent", _):
+                body = headers["User-Agent"].encode()
+                conn.send(
+                    b"".join(
+                        [
+                            b"HTTP/1.1 200 OK\r\n",
+                            b"Content-Type: text/plain\r\n",
+                            b"Content-Length: %d\r\n" % len(body),
+                            b"\r\n",
+                            body,
+                        ]
+                    )
+                )
+            case ("GET", _, ["", "files", f]):
+                target = Path(sys.argv[2]) / f
+                if target.exists():
+                    body = target.read_bytes()
+                    conn.send(
+                        b"".join(
+                            [
+                                b"HTTP/1.1 200 OK\r\n",
+                                b"Content-Type: application/octet-stream\r\n",
+                                b"Content-Length: %d\r\n" % len(body),
+                                b"\r\n",
+                                body,
+                            ]
+                        )
+                    )
+                else:
+                    conn.send(b"HTTP/1.1 404 Not Found\r\n\r\n")
+            case ("POST", _, ["", "files", f]):
+                target = Path(sys.argv[2]) / f
+                size = int(headers["Content-Length"])
+                remaining = size - len(body_start)
+                if remaining > 0:
+                    body_rest = conn.recv(remaining, socket.MSG_WAITALL)
+                else:
+                    body_rest = b""
+                body = body_start + body_rest
+                target.write_bytes(body)
+                conn.send(b"HTTP/1.1 201 Created\r\n\r\n")
+            case _:
+                conn.send(b"HTTP/1.1 404 Not Found\r\n\r\n")
 
-def process(sock):
-    method, target, headers = read_request(sock)
-
-    if target == "/":
-        response = Response()
-    elif target.startswith("/echo/"):
-        body = target[6:].encode()
-        response = Response(body=body)
-        accept_encodings = headers.get("Accept-Encoding", "").split(", ")
-        if "gzip" in accept_encodings:
-            response.headers["Content-Encoding"] = "gzip"
-            response.body = gzip.compress(body)
-            response.headers["Content-Length"] = str(len(response.body))
-    elif target.startswith("/user-agent"):
-        body = (headers.get("User-Agent") or "").encode()
-        response = Response(headers={"Content-Type": "text/plain", "Content-Length": str(len(body))}, body=body)
-    elif target.startswith("/files/") and method.lower() == "get":
-        filepath = pathlib.Path(sys.argv[2]) / target[7:]
-        if filepath.exists():
-            body = filepath.read_bytes()
-            response = Response(headers={"Content-Type": "application/octet-stream", "Content-Length": str(len(body))}, body=body)
-        else:
-            response = Response(status_code=404, status_text="Not Found")
-    elif target.startswith("/files/") and method.lower() == "post":
-        filepath = pathlib.Path(sys.argv[2]) / target[7:]
-        body = sock.recv(int(headers["Content-Length"]))
-        with open(filepath, "wb") as file:
-            file.write(body)
-        response = Response(status_code=201, status_text="Created")
-    else:
-        response = Response(status_code=404, status_text="Not Found")
-
-    sock.send(response.to_raw())
-    sock.close()
+def process_conn_with_exception(conn):
+    try:
+        process_conn(conn)
+    except Exception as ex:
+        print(ex)
 
 def main():
-    server_socket = socket.create_server(("localhost", 4221), reuse_port=True)
-    while True:
-        sock, _ = server_socket.accept()
-        threading.Thread(target=process, args=(sock,)).start()
+    with socket.create_server(("localhost", 4221), reuse_port=True) as server_socket:
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            while True:
+                conn, _ = server_socket.accept()
+                executor.submit(process_conn_with_exception, conn)
 
 if __name__ == "__main__":
     main()
