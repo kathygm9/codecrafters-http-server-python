@@ -7,7 +7,7 @@ from pathlib import Path
 def process_conn(conn):
     with conn:
         init = conn.recv(4096)
-
+        
         def parse_http(bs: bytes):
             lines: List[bytes] = []
             while not bs.startswith(b"\r\n"):
@@ -19,13 +19,14 @@ def process_conn(conn):
                     cont = conn.recv(4096)
                     bs += cont
             return lines, bs[2:]
-
+        
         (start_line, *raw_headers), body_start = parse_http(init)
         headers = {
             parts[0]: parts[1]
             for rh in raw_headers
             if (parts := rh.decode().split(": "))
         }
+        
         method, path, _ = start_line.decode().split(" ")
         
         match (method, path, path.split("/")):
@@ -35,13 +36,14 @@ def process_conn(conn):
                 body = data.encode()
                 extra_headers = []
                 if "Accept-Encoding" in headers:
-                    encoding = headers.get("Accept-Encoding")
-                    if encoding == "gzip":
+                    encodings = headers["Accept-Encoding"].split(", ")
+                    if "gzip" in encodings:
                         extra_headers.append(b"Content-Encoding: gzip\r\n")
                 conn.send(
                     b"".join(
                         [
-                            b"HTTP/1.1 200 OK\r\n",
+                            b"HTTP/1.1 200 OK",
+                            b"\r\n",
                             *extra_headers,
                             b"Content-Type: text/plain\r\n",
                             b"Content-Length: %d\r\n" % len(body),
@@ -55,7 +57,8 @@ def process_conn(conn):
                 conn.send(
                     b"".join(
                         [
-                            b"HTTP/1.1 200 OK\r\n",
+                            b"HTTP/1.1 200 OK",
+                            b"\r\n",
                             b"Content-Type: text/plain\r\n",
                             b"Content-Length: %d\r\n" % len(body),
                             b"\r\n",
@@ -70,7 +73,8 @@ def process_conn(conn):
                     conn.send(
                         b"".join(
                             [
-                                b"HTTP/1.1 200 OK\r\n",
+                                b"HTTP/1.1 200 OK",
+                                b"\r\n",
                                 b"Content-Type: application/octet-stream\r\n",
                                 b"Content-Length: %d\r\n" % len(body),
                                 b"\r\n",
@@ -93,7 +97,8 @@ def process_conn(conn):
                 conn.send(
                     b"".join(
                         [
-                            b"HTTP/1.1 201 Created\r\n",
+                            b"HTTP/1.1 201 Created",
+                            b"\r\n",
                             b"\r\n",
                         ]
                     )
